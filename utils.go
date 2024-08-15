@@ -44,6 +44,7 @@ func goToolchainVersion() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	defer vFile.Close()
 
 	var goVersion string
 
