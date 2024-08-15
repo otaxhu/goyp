@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
 	"go/version"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,4 +61,45 @@ func goToolchainVersion() (string, error) {
 	}
 
 	return v, nil
+}
+
+var stdPackages map[string]struct{}
+
+func initStdPackagesList() error {
+	stdPackages = map[string]struct{}{}
+
+	b := bytes.Buffer{}
+	errB := bytes.Buffer{}
+
+	c := exec.Command("go", "list", "std")
+	c.Stderr = &errB
+	c.Stdout = &b
+
+	err := c.Run()
+	if x, ok := err.(*exec.ExitError); ok {
+		return fmt.Errorf("initStdPackagesList: command 'go list std' exited with code '%d': %s", x.ExitCode(), errB.Bytes())
+	} else if err != nil {
+		return err
+	}
+
+	sc := bufio.NewScanner(&b)
+	for sc.Scan() {
+		p := strings.TrimSpace(sc.Text())
+		if p == "" {
+			continue
+		}
+		stdPackages[p] = struct{}{}
+	}
+	return nil
+}
+
+func isStdPackage(importPath string) bool {
+	if stdPackages == nil {
+		err := initStdPackagesList()
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	_, ok := stdPackages[importPath]
+	return ok
 }
