@@ -67,3 +67,10 @@ func TestIsStdPackage(t *testing.T) {
 	}
 
 }
+
+func TestGoModCache(t *testing.T) {
+	_, err := goModCache()
+	if err != nil {
+		t.Fatal(err)
+	}
+}

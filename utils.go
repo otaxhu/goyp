@@ -119,3 +119,32 @@ func isStdPackage(importPath string) bool {
 	_, ok := stdPackages[importPath]
 	return ok
 }
+
+// Get $GOMODCACHE path, using 'go env GOMODCACHE' command
+func goModCache() (string, error) {
+	b := bytes.Buffer{}
+	errB := bytes.Buffer{}
+	c := exec.Command("go", "env", "GOMODCACHE")
+
+	c.Stderr = &errB
+	c.Stdout = &b
+
+	err := c.Run()
+	if x, ok := err.(*exec.ExitError); ok {
+		return "", fmt.Errorf("goModCache: command 'go env GOMODCACHE' exited with code '%d': %s", x.ExitCode(), errB.Bytes())
+	} else if err != nil {
+		return "", err
+	}
+
+	if errB.Len() > 0 {
+		return "", fmt.Errorf("goModCache: %s", errB.Bytes())
+	}
+
+	pathGOMODCACHE := strings.TrimSpace(b.String())
+
+	if !filepath.IsAbs(pathGOMODCACHE) {
+		return "", fmt.Errorf("goModCache: could not determine GOMODCACHE using 'go env GOMODCACHE' command")
+	}
+
+	return pathGOMODCACHE, nil
+}
