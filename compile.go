@@ -39,8 +39,10 @@ import (
 // importPath is the module-aware path to find this package, used to create directory structure
 // inside of outDir.
 //
+// GOOS and GOARCH is the targeted operative system and platform architecture.
+//
 // Returns path to object file generated.
-func compilePackage(outDir, pkgPath, importPath string) (objPath string, err error) {
+func compilePackage(outDir, pkgPath, importPath, GOOS, GOARCH string) (objPath string, err error) {
 	entries, err := os.ReadDir(pkgPath)
 	if err != nil {
 		return
@@ -80,6 +82,9 @@ func compilePackage(outDir, pkgPath, importPath string) (objPath string, err err
 	toolCompileArgs = append(toolCompileArgs, goFiles...)
 
 	c := exec.Command("go", toolCompileArgs...)
+
+	c.Env = os.Environ()
+	c.Env = append(c.Env, "GOOS="+GOOS, "GOARCH="+GOARCH)
 
 	c.Stderr = os.Stderr
 	c.Stdout = os.Stdout

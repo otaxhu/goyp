@@ -152,7 +152,7 @@ See 'goyp help' for more information.
 
 		// TODO: std packages list available in 'go list std' command
 
-		objPath, err := compilePackage(tempDir, pathPackage, modInfo.Module.Mod.Path)
+		objPath, err := compilePackage(tempDir, pathPackage, modInfo.Module.Mod.Path, env.Get("GOOS"), env.Get("GOARCH"))
 		if err != nil {
 			log.Fatal(err)
 		}
