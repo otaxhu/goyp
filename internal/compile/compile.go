@@ -14,7 +14,7 @@
    limitations under the License.
 */
 
-package main
+package compile
 
 import (
 	"fmt"
@@ -42,7 +42,7 @@ import (
 // GOOS and GOARCH is the targeted operative system and platform architecture.
 //
 // Returns path to object file generated.
-func compilePackage(outDir, pkgPath, importPath, GOOS, GOARCH string) (objPath string, err error) {
+func CompilePackage(outDir, pkgPath, importPath, GOOS, GOARCH string) (objPath string, err error) {
 	entries, err := os.ReadDir(pkgPath)
 	if err != nil {
 		return

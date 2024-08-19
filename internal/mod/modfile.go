@@ -14,7 +14,7 @@
    limitations under the License.
 */
 
-package main
+package mod
 
 import (
 	"io"
@@ -26,23 +26,23 @@ import (
 //
 // Interesting property:
 //
-// root + filename = abs path to file in OS
-type moduleFile struct {
-	// Absolute path to root of Module
-	root string
+// Root + Filename = abs path to file in OS
+type ModuleFile struct {
+	// Absolute path to Root of Module
+	Root string
 
 	// Relative from module
-	filename string
+	Filename string
 }
 
-func (m moduleFile) Path() string {
-	return m.filename
+func (m ModuleFile) Path() string {
+	return m.Filename
 }
 
-func (m moduleFile) Open() (io.ReadCloser, error) {
-	return os.Open(filepath.Join(m.root, m.filename))
+func (m ModuleFile) Open() (io.ReadCloser, error) {
+	return os.Open(filepath.Join(m.Root, m.Filename))
 }
 
-func (m moduleFile) Lstat() (os.FileInfo, error) {
-	return os.Lstat(filepath.Join(m.root, m.filename))
+func (m ModuleFile) Lstat() (os.FileInfo, error) {
+	return os.Lstat(filepath.Join(m.Root, m.Filename))
 }

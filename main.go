@@ -17,23 +17,17 @@
 package main
 
 import (
-	"flag"
-	"go/build"
 	"log"
 	"os"
-	"path/filepath"
 
-	"golang.org/x/mod/modfile"
-	modzip "golang.org/x/mod/zip"
+	"github.com/otaxhu/goyp/internal/cmd/build"
 )
 
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix("goyp: ")
 
-	set := flag.NewFlagSet("goyp", flag.ExitOnError)
-
-	set.Usage = func() {
+	if len(os.Args) < 2 {
 		os.Stderr.WriteString(`Usage: goyp <command> [arguments...]
 
 Description:
@@ -59,19 +53,8 @@ Commands:
 
 See 'goyp help' for more information.
 `)
-	}
-
-	if len(os.Args) < 2 {
-		set.Usage()
 		os.Exit(1)
 	}
-
-	// Contains environment variables to control command process
-	env, err := parseGoEnv()
-	if err != nil {
-		log.Fatal(err)
-	}
-	_ = env
 
 	command := os.Args[1]
 
@@ -79,105 +62,7 @@ See 'goyp help' for more information.
 	case "run", "version", "help", "dist-lib", "install":
 		log.Fatalf("TODO: '%s' command unimplemented", command)
 	case "build":
-		outputPointer := set.String("o", "", "output file path")
-
-		set.Parse(os.Args[2:])
-
-		// zip file or executable
-		var outputPath string
-		var err error
-		var pathPackage string
-
-		if set.NArg() == 0 {
-			pathPackage, err = filepath.Abs(".")
-			if err != nil {
-				log.Fatal(err)
-			}
-		} else if set.NArg() == 1 {
-			pathPackage, err = filepath.Abs(set.Arg(0))
-			if err != nil {
-				log.Fatal(err)
-			}
-		} else {
-			log.Fatalf("invalid number of packages, expected 0 or 1, got %d", set.NArg())
-		}
-
-		goModPath := filepath.Join(pathPackage, "go.mod")
-
-		goModBytes, err := os.ReadFile(goModPath)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		modInfo, err := modfile.Parse("go.mod", goModBytes, nil)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		// TODO: pkgInfo provides import information, use it to compile dependency packages
-		// before compiling it.
-		pkgInfo, err := build.ImportDir(pathPackage, 0)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		if pkgInfo.Name == "main" {
-			log.Fatal("TODO: compile 'main' package unimplemented")
-		}
-
-		if *outputPointer == "" {
-			outputPath, err = filepath.Abs(filepath.Base(modInfo.Module.Mod.Path) + ".zip")
-			if err != nil {
-				log.Fatal(err)
-			}
-		} else {
-			outputPath, err = filepath.Abs(*outputPointer)
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
-
-		outputFile, err := os.Create(outputPath)
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer outputFile.Close()
-
-		tempDir, err := os.MkdirTemp("", "goyp-build-*")
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		// TODO: search in GOMODCACHE for resolving non-std modules
-
-		// TODO: std packages list available in 'go list std' command
-
-		objPath, err := compilePackage(tempDir, pathPackage, modInfo.Module.Mod.Path, env.Get("GOOS"), env.Get("GOARCH"))
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		// TODO: use a better semver, maybe from git tags
-		modInfo.Module.Mod.Version = "v0.0.0"
-
-		// TODO: After compiling all of the packages, call this function with a slice
-		// with all of the files
-		err = modzip.Create(outputFile, modInfo.Module.Mod, []modzip.File{
-			&moduleFile{
-				root:     filepath.Dir(objPath),
-				filename: filepath.Base(objPath),
-			},
-			&moduleFile{
-				root:     pathPackage,
-				filename: "go.mod",
-			},
-		})
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		break
-
+		build.Build(os.Args[2:])
 	default:
 		log.Fatalf("invalid '%s' command", command)
 	}
