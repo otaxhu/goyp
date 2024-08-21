@@ -35,16 +35,28 @@ import (
 // args after command
 func Build(args []string) {
 	set := flag.NewFlagSet("build", flag.ExitOnError)
+	set.Usage = func() {
+		os.Stderr.WriteString(`Usage: goyp build [-o path] [module-dir]
+
+Flags:
+  -o    Path to the output file
+
+Arguments:
+  module-dir    Path to the directory containing the Go Module
+`)
+	}
 	outputPointer := set.String("o", "", "output file path")
 
 	targets := map[string]struct{}{}
 	envTargets := os.Getenv("GOYP_TARGETS")
-	for _, t := range strings.Split(envTargets, ",") {
-		b, a, _ := strings.Cut(t, "_")
-		if b == "" || a == "" {
-			log.Fatalf("build: invalid target '%s' found in GOYP_TARGETS environment variable", t)
+	if envTargets != "" {
+		for _, t := range strings.Split(envTargets, ",") {
+			b, a, _ := strings.Cut(t, "_")
+			if b == "" || a == "" {
+				log.Fatalf("build: invalid target '%s' found in GOYP_TARGETS environment variable", t)
+			}
+			targets[t] = struct{}{}
 		}
-		targets[t] = struct{}{}
 	}
 
 	if len(targets) == 0 {
