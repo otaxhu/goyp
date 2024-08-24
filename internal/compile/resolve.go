@@ -45,8 +45,8 @@ func init() {
 }
 
 type queueElement struct {
+	// set pkg.ImportPath to every queueElement before adding to queue
 	pkg               *build.Package
-	importPath        string
 	unresolvedImports map[string]struct{}
 }
 
@@ -58,7 +58,33 @@ type Resolver struct {
 	GoToolchainVersion string
 }
 
-func (r *Resolver) ResolveDeps(modDir string, modFile *modfile.File) (pkgsToCompile []*build.Package, zipModFound []string, err error) {
+// modDir is the root directory of the module that is being processed,
+// should be an absolute path
+//
+// targetPkg is an optional path parameter that is relative to modDir,
+// specifying a main package that is required to be resolved, should be empty
+// string if no main package is gonna be build
+//
+// modFile is the parsed go.mod file from the targeted module modDir
+//
+// # Returns:
+//
+// pkgsToCompile is a slice that contains all of the packages that the
+// targeted module provides in source code format, including targetPkg if specified. They are
+// sorted in a way such that the 'go tool compile' can compile them correctly
+// with no dependency errors
+//
+// zipModFound is a slice that contains paths to zip modules, where you can find libraries in
+// object code format
+//
+// err is non-nil only if:
+//   - Dependencies cannot be resolved (missing packages, build constraints not satisfied, etc)
+//   - if specified targetPkg, and targetPkg is not a main package or targetPkg is not a valid
+//     relative path to modDir
+//   - OS I/O error
+//   - Circular dependency between packages
+//   - Any package imports a main package
+func (r *Resolver) ResolveDeps(modDir, targetPkg string, modFile *modfile.File) (pkgsToCompile []*build.Package, zipModFound []string, err error) {
 	ctx := &build.Context{
 		GOARCH:   r.GOARCH,
 		GOOS:     r.GOOS,
@@ -69,6 +95,92 @@ func (r *Resolver) ResolveDeps(modDir string, modFile *modfile.File) (pkgsToComp
 
 	pkgsResolved := maps.Clone(stdPackages)
 	pkgsListed := maps.Clone(stdPackages)
+
+	if targetPkg != "" {
+		pkg, err := ctx.ImportDir(filepath.Join(modDir, targetPkg), 0)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !pkg.IsCommand() {
+			return nil, nil, fmt.Errorf("ResolveDeps(): target package '%s' is not a main package", filepath.Join(modDir, targetPkg))
+		}
+		unresolved := map[string]struct{}{}
+		for _, imp := range pkg.Imports {
+			if _, ok := pkgsResolved[imp]; !ok {
+				unresolved[imp] = struct{}{}
+			}
+		}
+		pkg.ImportPath = pathpkg.Join(modFile.Module.Mod.Path, targetPkg)
+		if len(unresolved) > 0 {
+			queue = append(queue, queueElement{
+				pkg:               pkg,
+				unresolvedImports: unresolved,
+			})
+		} else {
+			pkgsToCompile = append(pkgsToCompile, pkg)
+			// Do not add to pkgsListed nor pkgsResolved since this is a main package and cannot
+			// be imported by any package
+			//
+			// pkgsListed[pkg.ImportPath] = struct{}{}
+			// pkgsResolved[pkg.ImportPath] = struct{}{}
+		}
+	}
+
+	walkFn := func(modRoot, modPath string) error {
+		return filepath.WalkDir(modRoot, func(path string, entry fs.DirEntry, cbErr error) error {
+			if cbErr != nil {
+				return cbErr
+			}
+			// We are looking only for directories, skips file
+			if !entry.IsDir() {
+				return nil
+			}
+
+			// ignore dirs that starts with '.' or '_'
+			if strings.HasPrefix(entry.Name(), ".") || strings.HasPrefix(entry.Name(), "_") {
+				return filepath.SkipDir
+			}
+
+			pkg, err := ctx.ImportDir(path, 0)
+			if err != nil {
+				return err
+			}
+
+			// Early return if it's a main package, the only main package that their dependencies
+			// will be resolved is the targetPkg
+			if pkg.IsCommand() {
+				return nil
+			}
+
+			relFromModRoot, err := filepath.Rel(modRoot, path)
+			if err != nil {
+				return err
+			}
+
+			unresolved := map[string]struct{}{}
+			for _, imp := range pkg.Imports {
+				if _, ok := pkgsResolved[imp]; !ok {
+					unresolved[imp] = struct{}{}
+				}
+			}
+
+			pkg.ImportPath = pathpkg.Join(modPath, filepath.ToSlash(relFromModRoot))
+
+			if len(unresolved) > 0 {
+				queue = append(queue, queueElement{
+					pkg:               pkg,
+					unresolvedImports: unresolved,
+				})
+			} else {
+				pkgsToCompile = append(pkgsToCompile, pkg)
+				pkgsResolved[pkg.ImportPath] = struct{}{}
+			}
+
+			pkgsListed[pkg.ImportPath] = struct{}{}
+
+			return nil
+		})
+	}
 
 	for _, m := range modFile.Require {
 		modRoot := filepath.Join(r.ModCachePath, filepath.FromSlash(m.Mod.Path)+"@"+m.Mod.Version)
@@ -92,13 +204,12 @@ func (r *Resolver) ResolveDeps(modDir string, modFile *modfile.File) (pkgsToComp
 				if ext != ".a" || pathpkg.Base(zf.Name) == ".a" {
 					return nil, nil, fmt.Errorf("ResolveDeps(): zip modules: invalid filename '%s' found in module '%s'", zf.Name, m.Mod.Path)
 				}
-				modDir, modBase := pathpkg.Split(m.Mod.Path)
-				// Files in zip must be named the following: modulebasename/**/*.a OR modulebasename.a
-				if !strings.HasPrefix(zf.Name, modBase) {
+				// Files in zip must be named the following: modulename/**/*.a OR modulename.a
+				if !strings.HasPrefix(zf.Name, m.Mod.Path) {
 					return nil, nil, fmt.Errorf("ResolveDeps(): zip modules: invalid zip file, contains following file '%s' found in module '%s'", zf.Name, m.Mod.Path)
 				}
 				zipModFound = append(zipModFound, pathToZipMod)
-				pkgImportPath := pathpkg.Join(modDir, zf.Name[:len(zf.Name)-len(ext)])
+				pkgImportPath := zf.Name[:len(zf.Name)-len(ext)]
 				pkgsListed[pkgImportPath] = struct{}{}
 				pkgsResolved[pkgImportPath] = struct{}{}
 			}
@@ -111,104 +222,14 @@ func (r *Resolver) ResolveDeps(modDir string, modFile *modfile.File) (pkgsToComp
 		// it means that module doesn't provide object code packages, keep searching in
 		// module source code
 
-		err = filepath.WalkDir(modRoot, func(path string, entry fs.DirEntry, cbErr error) error {
-			if cbErr != nil {
-				return cbErr
-			}
-			// We are looking only for directories, skips file
-			if !entry.IsDir() {
-				return nil
-			}
-
-			relFromModRoot, err := filepath.Rel(modRoot, path)
-			if err != nil {
-				return err
-			}
-			// Inside of .goyp should not be any source code files,
-			// but there can be a .goyp dir not rooted in modRoot
-			if relFromModRoot == ".goyp" {
-				return filepath.SkipDir
-			}
-
-			pkg, err := ctx.ImportDir(path, 0)
-			if err != nil {
-				return err
-			}
-
-			unresolved := map[string]struct{}{}
-			for _, imp := range pkg.Imports {
-				if _, ok := pkgsResolved[imp]; !ok {
-					unresolved[imp] = struct{}{}
-				}
-			}
-
-			pkgImportPath := pathpkg.Join(m.Mod.Path, filepath.ToSlash(relFromModRoot))
-
-			if len(unresolved) > 0 {
-				queue = append(queue, queueElement{
-					importPath:        pkgImportPath,
-					pkg:               pkg,
-					unresolvedImports: unresolved,
-				})
-			} else {
-				pkgsToCompile = append(pkgsToCompile, pkg)
-				pkgsResolved[pkgImportPath] = struct{}{}
-			}
-
-			pkgsListed[pkgImportPath] = struct{}{}
-
-			return nil
-		})
+		err = walkFn(modRoot, m.Mod.Path)
 		if err != nil {
 			return nil, nil, err
 		}
 	}
 
 	// After resolving all of the required modules, resolve the targeted module
-	err = filepath.WalkDir(modDir, func(path string, entry fs.DirEntry, cbErr error) error {
-		if cbErr != nil {
-			return cbErr
-		}
-
-		if !entry.IsDir() {
-			return nil
-		}
-
-		pkg, err := ctx.ImportDir(path, 0)
-		if err != nil {
-			return err
-		}
-
-		unresolved := map[string]struct{}{}
-
-		for _, imp := range pkg.Imports {
-			if _, ok := pkgsResolved[imp]; !ok {
-				unresolved[imp] = struct{}{}
-			}
-		}
-
-		relFromModRoot, err := filepath.Rel(modDir, path)
-		if err != nil {
-			return err
-		}
-
-		pkgImportPath := pathpkg.Join(modFile.Module.Mod.Path, filepath.ToSlash(relFromModRoot))
-
-		if len(unresolved) > 0 {
-			queue = append(queue, queueElement{
-				importPath:        pkgImportPath,
-				pkg:               pkg,
-				unresolvedImports: unresolved,
-			})
-		} else {
-			pkgsToCompile = append(pkgsToCompile, pkg)
-			pkgsResolved[pkgImportPath] = struct{}{}
-		}
-
-		pkgsListed[pkgImportPath] = struct{}{}
-
-		return nil
-	})
+	err = walkFn(modDir, modFile.Module.Mod.Path)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -228,7 +249,7 @@ func (r *Resolver) ResolveDeps(modDir string, modFile *modfile.File) (pkgsToComp
 			}
 			if len(el.unresolvedImports) == 0 {
 				pkgsToCompile = append(pkgsToCompile, el.pkg)
-				pkgsResolved[el.importPath] = struct{}{}
+				pkgsResolved[el.pkg.ImportPath] = struct{}{}
 				queue = append(queue[:i], queue[i+1:]...)
 				resolvedOne = true
 			} else {
