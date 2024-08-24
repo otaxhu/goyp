@@ -55,13 +55,13 @@ type queueElement struct {
 }
 
 type Resolver struct {
-	// Targeted platform
-	GOOS, GOARCH string
-
 	ModCachePath       string
 	GoToolchainVersion string
 }
 
+// ctxt is the build.Context struct that is going to be used for resolving
+// packages
+//
 // modDir is the root directory of the module that is being processed,
 // should be an absolute path
 //
@@ -88,12 +88,7 @@ type Resolver struct {
 //   - OS I/O error
 //   - Circular dependency between packages
 //   - Any package imports a main package
-func (r *Resolver) ResolveDeps(modDir, targetPkg string, modFile *modfile.File) (pkgsToCompile []*build.Package, zipModFound []string, err error) {
-	ctx := &build.Context{
-		GOARCH:   r.GOARCH,
-		GOOS:     r.GOOS,
-		Compiler: "gc",
-	}
+func (r *Resolver) ResolveDeps(ctxt *build.Context, modDir, targetPkg string, modFile *modfile.File) (pkgsToCompile []*build.Package, zipModFound []string, err error) {
 
 	queue := []queueElement{}
 
@@ -101,7 +96,7 @@ func (r *Resolver) ResolveDeps(modDir, targetPkg string, modFile *modfile.File) 
 	pkgsListed := maps.Clone(stdPackages)
 
 	if targetPkg != "" {
-		pkg, err := ctx.ImportDir(filepath.Join(modDir, targetPkg), 0)
+		pkg, err := ctxt.ImportDir(filepath.Join(modDir, targetPkg), 0)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -146,7 +141,7 @@ func (r *Resolver) ResolveDeps(modDir, targetPkg string, modFile *modfile.File) 
 				return filepath.SkipDir
 			}
 
-			pkg, err := ctx.ImportDir(path, 0)
+			pkg, err := ctxt.ImportDir(path, 0)
 			if err != nil {
 				return err
 			}
@@ -195,7 +190,7 @@ func (r *Resolver) ResolveDeps(modDir, targetPkg string, modFile *modfile.File) 
 
 	for _, m := range modFile.Require {
 		modRoot := filepath.Join(r.ModCachePath, filepath.FromSlash(m.Mod.Path)+"@"+m.Mod.Version)
-		pathToZipMod := filepath.Join(modRoot, ".goyp", r.GOOS+"@"+r.GOARCH+"@"+r.GoToolchainVersion+".zip")
+		pathToZipMod := filepath.Join(modRoot, ".goyp", ctxt.GOOS+"@"+ctxt.GOARCH+"@"+r.GoToolchainVersion+".zip")
 		zipFile, err := os.Open(pathToZipMod)
 
 		// If file is found, then read it and add entries to corresponding list and maps
