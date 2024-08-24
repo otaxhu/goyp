@@ -31,7 +31,10 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-var stdPackages = make(map[string]struct{})
+// Value true means that is a main package
+//
+// Otherwise is a importable package
+var stdPackages = make(map[string]bool)
 
 // Initialize stdPackages map
 func init() {
@@ -40,7 +43,8 @@ func init() {
 		panic("goyp: could not load std packages: " + err.Error())
 	}
 	for _, p := range pkgs {
-		stdPackages[p.PkgPath] = struct{}{}
+		// packages.Load doesn't return main packages
+		stdPackages[p.PkgPath] = false
 	}
 }
 
@@ -118,12 +122,13 @@ func (r *Resolver) ResolveDeps(modDir, targetPkg string, modFile *modfile.File) 
 			})
 		} else {
 			pkgsToCompile = append(pkgsToCompile, pkg)
-			// Do not add to pkgsListed nor pkgsResolved since this is a main package and cannot
+			// Do not add to pkgsResolved since this is a main package and cannot
 			// be imported by any package
 			//
-			// pkgsListed[pkg.ImportPath] = struct{}{}
 			// pkgsResolved[pkg.ImportPath] = struct{}{}
 		}
+		// True because is a main package
+		pkgsListed[pkg.ImportPath] = true
 	}
 
 	walkFn := func(modRoot, modPath string) error {
@@ -146,15 +151,19 @@ func (r *Resolver) ResolveDeps(modDir, targetPkg string, modFile *modfile.File) 
 				return err
 			}
 
-			// Early return if it's a main package, the only main package that their dependencies
-			// will be resolved is the targetPkg
-			if pkg.IsCommand() {
-				return nil
-			}
-
 			relFromModRoot, err := filepath.Rel(modRoot, path)
 			if err != nil {
 				return err
+			}
+
+			pkg.ImportPath = pathpkg.Join(modPath, filepath.ToSlash(relFromModRoot))
+
+			// Early return if it's a main package, the only main package that their dependencies
+			// will be resolved is the targetPkg
+			if pkg.IsCommand() {
+				// value used in queue loop to return an error if another package imports this
+				pkgsListed[pkg.ImportPath] = true
+				return nil
 			}
 
 			unresolved := map[string]struct{}{}
@@ -164,8 +173,6 @@ func (r *Resolver) ResolveDeps(modDir, targetPkg string, modFile *modfile.File) 
 				}
 			}
 
-			pkg.ImportPath = pathpkg.Join(modPath, filepath.ToSlash(relFromModRoot))
-
 			if len(unresolved) > 0 {
 				queue = append(queue, queueElement{
 					pkg:               pkg,
@@ -173,10 +180,14 @@ func (r *Resolver) ResolveDeps(modDir, targetPkg string, modFile *modfile.File) 
 				})
 			} else {
 				pkgsToCompile = append(pkgsToCompile, pkg)
-				pkgsResolved[pkg.ImportPath] = struct{}{}
+				pkgsResolved[pkg.ImportPath] = false
 			}
 
-			pkgsListed[pkg.ImportPath] = struct{}{}
+			if _, ok := pkgsListed[pkg.ImportPath]; ok {
+				return fmt.Errorf("ResolveDeps: package '%s' has been redeclared", pkg.ImportPath)
+			}
+
+			pkgsListed[pkg.ImportPath] = false
 
 			return nil
 		})
@@ -210,8 +221,12 @@ func (r *Resolver) ResolveDeps(modDir, targetPkg string, modFile *modfile.File) 
 				}
 				zipModFound = append(zipModFound, pathToZipMod)
 				pkgImportPath := zf.Name[:len(zf.Name)-len(ext)]
-				pkgsListed[pkgImportPath] = struct{}{}
-				pkgsResolved[pkgImportPath] = struct{}{}
+				// There is a conflict of packages, invalid zip module
+				if _, ok := pkgsListed[pkgImportPath]; ok {
+					return nil, nil, fmt.Errorf("ResolveDeps(): zip modules: invalid zip module '%s', package '%s' has been redeclared", pathToZipMod, pkgImportPath)
+				}
+				pkgsListed[pkgImportPath] = false
+				pkgsResolved[pkgImportPath] = false
 			}
 		} else if err != os.ErrNotExist {
 			return nil, nil, err
@@ -240,8 +255,10 @@ func (r *Resolver) ResolveDeps(modDir, targetPkg string, modFile *modfile.File) 
 			el := queue[i]
 
 			for k := range el.unresolvedImports {
-				if _, ok := pkgsListed[k]; !ok {
+				if isMain, ok := pkgsListed[k]; !ok {
 					return nil, nil, fmt.Errorf("ResolveDeps(): no module provides '%s' package, try to run: go get %s", k, k)
+				} else if isMain {
+					return nil, nil, fmt.Errorf("ResolveDeps(): invalid import, package '%s' is importing package main '%s'", el.pkg.ImportPath, k)
 				}
 				if _, ok := pkgsResolved[k]; ok {
 					delete(el.unresolvedImports, k)
@@ -249,7 +266,7 @@ func (r *Resolver) ResolveDeps(modDir, targetPkg string, modFile *modfile.File) 
 			}
 			if len(el.unresolvedImports) == 0 {
 				pkgsToCompile = append(pkgsToCompile, el.pkg)
-				pkgsResolved[el.pkg.ImportPath] = struct{}{}
+				pkgsResolved[el.pkg.ImportPath] = false
 				queue = append(queue[:i], queue[i+1:]...)
 				resolvedOne = true
 			} else {
