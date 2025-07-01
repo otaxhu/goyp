@@ -1,3 +1,6 @@
+## This repository has been archived.
+For more information, see this discussion [#1](https://github.com/otaxhu/goyp/issues/1)
+
 # Goyp - Build system that protects your Software IP written in Golang
 
 Goyp (pronounced go - eep) is a Golang tool that uses `go tool compile` and `go tool link` Golang commands to compile and link your application together with any library that is in Go Object code format or source code format. As well as compile your library to Go Object code to distribute to your users and protect your intellectual property.
